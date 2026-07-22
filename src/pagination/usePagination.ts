@@ -9,6 +9,7 @@ import {
   COMMAND_PRIORITY_HIGH,
   KEY_BACKSPACE_COMMAND,
   KEY_DELETE_COMMAND,
+  KEY_ENTER_COMMAND,
   type ElementNode,
 } from 'lexical';
 import { MARGIN_PX, PAGE_GAP_PX, USABLE_HEIGHT_PX } from './constants';
@@ -122,6 +123,11 @@ function $paragraphAtCollapsedEnd(): ElementNode | null {
   return null;
 }
 
+interface PendingSpacingTransfer {
+  survivingKey: string;
+  marginBottom: string;
+}
+
 // Splits every block that doesn't fit its page; the model then has no block
 // taller than one page's remaining budget, and the spacer pass aligns each
 // page's first block with its background card.
@@ -129,6 +135,21 @@ export function usePagination(): number {
   const [editor] = useLexicalComposerContext();
   const [pageCount, setPageCount] = useState(1);
   const continuationKeys = useRef<Set<string>>(new Set());
+  // Preserved spacing (margin-bottom) only lives on paragraphs' DOM elements
+  // - it isn't part of Lexical's node model at all (see pasteSpacing.ts) -
+  // so it isn't automatically carried along when Lexical's own default
+  // Backspace/Delete handling merges two real paragraphs and destroys one
+  // of their elements. We capture the about-to-be-removed paragraph's
+  // spacing here, before that default handling runs, and reapply it to the
+  // surviving paragraph once the merge's update commits.
+  const pendingSpacingTransfer = useRef<PendingSpacingTransfer | null>(null);
+  // Symmetric problem for a real Enter keypress: Lexical's default handling
+  // splits a paragraph by keeping the original element as the head and
+  // creating a brand-new element for the tail - so any margin-bottom stays
+  // on the head even though the tail is now the true end of the paragraph.
+  // We capture the original element's key before the split and move its
+  // spacing onto whatever new sibling appears after the update commits.
+  const pendingSplitSpacing = useRef<string | null>(null);
 
   const reflow = useCallback(() => {
     if (!editor.getRootElement()) return;
@@ -220,6 +241,25 @@ export function usePagination(): number {
         // text nodes after a large paste) - treating every such update as
         // "ours" silently skipped reflowing content that genuinely changed.
         if (tags.has(PAGINATION_TAG)) return;
+
+        const transfer = pendingSpacingTransfer.current;
+        if (transfer) {
+          pendingSpacingTransfer.current = null;
+          const survivorEl = editor.getElementByKey(transfer.survivingKey);
+          if (survivorEl) survivorEl.style.marginBottom = transfer.marginBottom;
+        }
+
+        const splitOriginalKey = pendingSplitSpacing.current;
+        if (splitOriginalKey) {
+          pendingSplitSpacing.current = null;
+          const origEl = editor.getElementByKey(splitOriginalKey);
+          const tailEl = origEl?.nextElementSibling as HTMLElement | null;
+          if (origEl?.style.marginBottom && tailEl) {
+            tailEl.style.marginBottom = origEl.style.marginBottom;
+            origEl.style.marginBottom = '';
+          }
+        }
+
         schedule();
       }),
 
@@ -231,18 +271,31 @@ export function usePagination(): number {
       // exactly as if the boundary didn't exist. Without this, the default
       // handler merges the fake boundary - deleting nothing - and the next
       // reflow immediately re-splits it, so the key appears dead.
+      //
+      // For a REAL paragraph boundary (not ours), we don't intercept the
+      // merge itself - Lexical's default handling does that correctly - but
+      // we do capture the about-to-be-removed paragraph's spacing first, so
+      // the listener above can restore it onto the surviving paragraph
+      // afterward (see PendingSpacingTransfer above).
       editor.registerCommand(
         KEY_BACKSPACE_COMMAND,
         (event) => {
           const paragraph = $paragraphAtCollapsedStart();
           if (!paragraph) return false;
-          if (!continuationKeys.current.has(paragraph.getKey())) return false;
           const prev = paragraph.getPreviousSibling();
           if (!prev || !$isElementNode(prev)) return false;
 
-          if (event) event.preventDefault();
-          prev.selectEnd().deleteCharacter(true);
-          return true;
+          if (continuationKeys.current.has(paragraph.getKey())) {
+            if (event) event.preventDefault();
+            prev.selectEnd().deleteCharacter(true);
+            return true;
+          }
+
+          const el = editor.getElementByKey(paragraph.getKey());
+          if (el?.style.marginBottom) {
+            pendingSpacingTransfer.current = { survivingKey: prev.getKey(), marginBottom: el.style.marginBottom };
+          }
+          return false;
         },
         COMMAND_PRIORITY_HIGH,
       ),
@@ -253,11 +306,42 @@ export function usePagination(): number {
           if (!paragraph) return false;
           const next = paragraph.getNextSibling();
           if (!next || !$isElementNode(next)) return false;
-          if (!continuationKeys.current.has(next.getKey())) return false;
 
-          if (event) event.preventDefault();
-          next.selectStart().deleteCharacter(false);
-          return true;
+          if (continuationKeys.current.has(next.getKey())) {
+            if (event) event.preventDefault();
+            next.selectStart().deleteCharacter(false);
+            return true;
+          }
+
+          // Delete merges `next` forward into `paragraph`, destroying
+          // next's element - capture its spacing for the surviving node.
+          const el = editor.getElementByKey(next.getKey());
+          if (el?.style.marginBottom) {
+            pendingSpacingTransfer.current = { survivingKey: paragraph.getKey(), marginBottom: el.style.marginBottom };
+          }
+          return false;
+        },
+        COMMAND_PRIORITY_HIGH,
+      ),
+
+      // Enter splits a paragraph in two; Lexical's default handling keeps
+      // the original element as the head and creates a fresh element for
+      // the tail, so we capture the head's spacing here and move it onto
+      // the new tail once the split's update commits (see the listener
+      // above) - the tail is now the paragraph's true end, not the head.
+      editor.registerCommand(
+        KEY_ENTER_COMMAND,
+        () => {
+          const selection = $getSelection();
+          if (!$isRangeSelection(selection)) return false;
+          const node = selection.anchor.getNode();
+          const paragraph = $isParagraphNode(node) ? node : $isTextNode(node) ? node.getParent() : null;
+          if (!paragraph || !$isParagraphNode(paragraph)) return false;
+          const el = editor.getElementByKey(paragraph.getKey());
+          if (el?.style.marginBottom) {
+            pendingSplitSpacing.current = paragraph.getKey();
+          }
+          return false;
         },
         COMMAND_PRIORITY_HIGH,
       ),
