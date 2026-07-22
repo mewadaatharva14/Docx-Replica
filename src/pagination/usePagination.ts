@@ -17,6 +17,14 @@ const MAX_SPLIT_ITERATIONS = 200;
 // ~2 lines at our 11pt baseline (see LINE_HEIGHT_MULTIPLIER in constants.ts).
 const MIN_ORPHAN_HEIGHT_PX = 40;
 
+// getBoundingClientRect excludes margin, but a paragraph's margin-bottom
+// (preserved from pasted content - see pasteSpacing.ts) is real vertical
+// space it occupies on the page, so pagination math must include it.
+function blockHeight(block: HTMLElement): number {
+  const marginBottom = parseFloat(getComputedStyle(block).marginBottom) || 0;
+  return block.getBoundingClientRect().height + marginBottom;
+}
+
 interface SplitTarget {
   x: number;
   y: number;
@@ -31,10 +39,11 @@ function findSplitTarget(root: HTMLElement): SplitTarget | null {
   const blocks = Array.from(root.children) as HTMLElement[];
   for (const block of blocks) block.style.marginTop = '0px';
   const rects = blocks.map((block) => block.getBoundingClientRect());
+  const heights = blocks.map(blockHeight);
 
   let usedHeight = 0;
   for (let i = 0; i < blocks.length; i++) {
-    const height = rects[i].height;
+    const height = heights[i];
     const remaining = USABLE_HEIGHT_PX - usedHeight;
 
     if (usedHeight > 0 && height > remaining) {
@@ -92,6 +101,16 @@ export function usePagination(): number {
         const newKey = await splitBlockAtPoint(editor, target.x, target.y);
         if (!newKey) break; // no valid split point; final pass falls back to whole-block push
         continuationKeys.current.add(newKey);
+
+        // Preserved trailing spacing (margin-bottom) belongs wherever the
+        // paragraph now actually ends - the continuation - not the head
+        // fragment.
+        const contEl = editor.getElementByKey(newKey);
+        const headEl = contEl?.previousElementSibling as HTMLElement | null;
+        if (contEl && headEl?.style.marginBottom) {
+          contEl.style.marginBottom = headEl.style.marginBottom;
+          headEl.style.marginBottom = '';
+        }
       }
 
       const root = editor.getRootElement();
@@ -99,7 +118,7 @@ export function usePagination(): number {
 
       const blocks = Array.from(root.children) as HTMLElement[];
       for (const block of blocks) block.style.marginTop = '0px';
-      const heights = blocks.map((block) => block.getBoundingClientRect().height);
+      const heights = blocks.map(blockHeight);
 
       let usedHeight = 0;
       let pages = 1;

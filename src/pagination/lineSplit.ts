@@ -31,6 +31,15 @@ export async function mergeContinuations(editor: LexicalEditor, registry: Set<st
         for (const child of node.getChildren()) {
           prev.append(child);
         }
+        // The continuation's element held the paragraph's real trailing
+        // spacing (see splitBlockAtPoint's caller); give it back to the
+        // piece that ends the paragraph now. Margin isn't part of Lexical's
+        // node model, so this reads/writes the DOM directly.
+        const contEl = editor.getElementByKey(key);
+        const headEl = editor.getElementByKey(prev.getKey());
+        if (contEl && headEl && contEl.style.marginBottom) {
+          headEl.style.marginBottom = contEl.style.marginBottom;
+        }
       }
       node.remove();
     }

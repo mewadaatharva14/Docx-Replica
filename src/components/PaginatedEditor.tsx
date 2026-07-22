@@ -5,6 +5,7 @@ import { HistoryPlugin } from '@lexical/react/LexicalHistoryPlugin';
 import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary';
 import { Toolbar } from './Toolbar';
 import { PageCanvas } from './PageCanvas';
+import { usePreservePasteSpacing } from './pasteSpacing';
 import { usePagination } from '../pagination/usePagination';
 import './editor.css';
 
@@ -18,6 +19,7 @@ function onError(error: Error) {
 
 function EditorSurface() {
   const pageCount = usePagination();
+  usePreservePasteSpacing();
   return (
     <PageCanvas pageCount={pageCount}>
       <RichTextPlugin
