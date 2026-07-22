@@ -8,6 +8,14 @@ import { mergeContinuations, splitBlockAtPoint } from './lineSplit';
 // couple of iterations.
 const MAX_SPLIT_ITERATIONS = 200;
 
+// Widow/orphan guard for forced splits (a block taller than one full page).
+// If the remaining space on the current page is smaller than this, splitting
+// there would strand just a line or two behind - so we treat the block as
+// starting a fresh page instead and give it the full page budget, matching
+// Google Docs' behavior of never leaving a tiny orphan at a page boundary.
+// ~2 lines at our 11pt baseline (see LINE_HEIGHT_MULTIPLIER in constants.ts).
+const MIN_ORPHAN_HEIGHT_PX = 40;
+
 interface SplitTarget {
   x: number;
   y: number;
@@ -26,13 +34,20 @@ function findSplitTarget(root: HTMLElement): SplitTarget | null {
   let usedHeight = 0;
   for (let i = 0; i < blocks.length; i++) {
     const height = rects[i].height;
+    let budget = USABLE_HEIGHT_PX - usedHeight;
 
-    if (usedHeight > 0 && usedHeight + height > USABLE_HEIGHT_PX) {
-      if (height > USABLE_HEIGHT_PX) {
-        return { x: rects[i].left + 1, y: rects[i].top + USABLE_HEIGHT_PX };
+    if (usedHeight > 0 && height > budget) {
+      if (height <= USABLE_HEIGHT_PX) {
+        usedHeight = height; // fits whole on a fresh page; it becomes that page's first block
+        continue;
       }
-      usedHeight = height; // fits whole on a fresh page; it becomes that page's first block
-      continue;
+      if (budget < MIN_ORPHAN_HEIGHT_PX) {
+        // Splitting with the current remaining space would strand a tiny
+        // orphan; give this block a full page's budget instead, as if it
+        // were starting fresh.
+        budget = USABLE_HEIGHT_PX;
+      }
+      return { x: rects[i].left + 1, y: rects[i].top + budget };
     }
 
     if (usedHeight === 0 && height > USABLE_HEIGHT_PX) {
