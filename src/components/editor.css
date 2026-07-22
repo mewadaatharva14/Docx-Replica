@@ -1,6 +1,61 @@
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: #fff;
+  border-bottom: 1px solid #dcdcdc;
+}
+
+.toolbar-label {
+  font: 13px/1 system-ui, sans-serif;
+  color: #555;
+  margin-right: 4px;
+}
+
+.toolbar button {
+  font: 13px/1 system-ui, sans-serif;
+  padding: 6px 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #f7f7f7;
+  cursor: pointer;
+}
+
+.toolbar button:hover {
+  background: #ececec;
+}
+
+.canvas {
+  background: #e9e9ec;
+  min-height: calc(100vh - 45px);
+  padding: 40px 0 200px;
+  display: flex;
+  justify-content: center;
+}
+
+.canvas-inner {
+  position: relative;
+}
+
+.page-background {
+  position: absolute;
+  left: 0;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+.content-column {
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+}
+
 .editor-input {
   outline: none;
-  position: relative;
 }
 
 .editor-paragraph {
@@ -13,8 +68,8 @@
 
 .editor-placeholder {
   position: absolute;
-  top: 0;
-  left: 0;
+  top: 96px;
+  left: 96px;
   color: #999;
   font-family: Arial, sans-serif;
   font-size: 11pt;
