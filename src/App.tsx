@@ -1,5 +1,7 @@
+import { PaginatedEditor } from './components/PaginatedEditor';
+
 function App() {
-  return <div>Docx-Replica</div>;
+  return <PaginatedEditor />;
 }
 
 export default App;

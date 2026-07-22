@@ -1,0 +1,22 @@
+.editor-input {
+  outline: none;
+  position: relative;
+}
+
+.editor-paragraph {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  font-size: 11pt;
+  line-height: 1.339;
+  color: #000;
+}
+
+.editor-placeholder {
+  position: absolute;
+  top: 0;
+  left: 0;
+  color: #999;
+  font-family: Arial, sans-serif;
+  font-size: 11pt;
+  pointer-events: none;
+}
