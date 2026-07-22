@@ -8,11 +8,12 @@ import { mergeContinuations, splitBlockAtPoint } from './lineSplit';
 // couple of iterations.
 const MAX_SPLIT_ITERATIONS = 200;
 
-// Widow/orphan guard for forced splits (a block taller than one full page).
-// If the remaining space on the current page is smaller than this, splitting
-// there would strand just a line or two behind - so we treat the block as
-// starting a fresh page instead and give it the full page budget, matching
-// Google Docs' behavior of never leaving a tiny orphan at a page boundary.
+// Widow/orphan guard, used on both sides of a candidate split: the minimum
+// amount of content a break must leave behind on the current page and ahead
+// on the next one. Below this, we prefer moving the block whole over
+// stranding a line or two - matching Google Docs' page-filling behavior:
+// split as tight as safely possible, only falling back to a whole-block
+// move when a split would leave too little on one side of the break.
 // ~2 lines at our 11pt baseline (see LINE_HEIGHT_MULTIPLIER in constants.ts).
 const MIN_ORPHAN_HEIGHT_PX = 40;
 
@@ -21,11 +22,11 @@ interface SplitTarget {
   y: number;
 }
 
-// Walks blocks the same way the final spacer pass does (a block that fits on
-// a fresh page just moves there whole) and returns a split point only for a
-// block that STILL doesn't fit even as the sole first item on a fresh page —
-// i.e. one that genuinely needs a mid-block line split. Returns null once
-// every block can be handled by whole-block page moves alone.
+// Prefers a tight split over moving a block whole, the way Google Docs fills
+// a page as far as it safely can before breaking - only avoiding a split
+// when it would strand fewer than MIN_ORPHAN_HEIGHT_PX worth of lines on
+// either side of the break. Returns null once every block already fits (via
+// a prior split or a whole-block move) with nothing left to fix.
 function findSplitTarget(root: HTMLElement): SplitTarget | null {
   const blocks = Array.from(root.children) as HTMLElement[];
   for (const block of blocks) block.style.marginTop = '0px';
@@ -34,19 +35,24 @@ function findSplitTarget(root: HTMLElement): SplitTarget | null {
   let usedHeight = 0;
   for (let i = 0; i < blocks.length; i++) {
     const height = rects[i].height;
-    let budget = USABLE_HEIGHT_PX - usedHeight;
+    const remaining = USABLE_HEIGHT_PX - usedHeight;
 
-    if (usedHeight > 0 && height > budget) {
+    if (usedHeight > 0 && height > remaining) {
       if (height <= USABLE_HEIGHT_PX) {
-        usedHeight = height; // fits whole on a fresh page; it becomes that page's first block
+        // Fits whole on a fresh page - but a tight split filling the
+        // current page's remaining space is preferable if it's safe (i.e.
+        // leaves enough lines on both sides of the break).
+        const tailHeight = height - remaining;
+        if (remaining >= MIN_ORPHAN_HEIGHT_PX && tailHeight >= MIN_ORPHAN_HEIGHT_PX) {
+          return { x: rects[i].left + 1, y: rects[i].top + remaining };
+        }
+        usedHeight = height; // move whole to a fresh page instead
         continue;
       }
-      if (budget < MIN_ORPHAN_HEIGHT_PX) {
-        // Splitting with the current remaining space would strand a tiny
-        // orphan; give this block a full page's budget instead, as if it
-        // were starting fresh.
-        budget = USABLE_HEIGHT_PX;
-      }
+      // Doesn't fit even a fresh page - must split somewhere. Avoid
+      // stranding a tiny orphan on the current page if the remaining
+      // budget there is too small.
+      const budget = remaining >= MIN_ORPHAN_HEIGHT_PX ? remaining : USABLE_HEIGHT_PX;
       return { x: rects[i].left + 1, y: rects[i].top + budget };
     }
 
