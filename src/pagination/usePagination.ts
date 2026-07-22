@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
+import {
+  $getSelection,
+  $isElementNode,
+  $isParagraphNode,
+  $isRangeSelection,
+  $isTextNode,
+  COMMAND_PRIORITY_HIGH,
+  KEY_BACKSPACE_COMMAND,
+  KEY_DELETE_COMMAND,
+  type ElementNode,
+} from 'lexical';
 import { MARGIN_PX, PAGE_GAP_PX, USABLE_HEIGHT_PX } from './constants';
 import { mergeContinuations, PAGINATION_TAG, splitBlockAtHeight } from './lineSplit';
 
@@ -77,6 +88,36 @@ function findSplitTarget(root: HTMLElement): SplitTarget | null {
     }
 
     usedHeight += height;
+  }
+  return null;
+}
+
+// Collapsed-selection helpers for the page-boundary key interceptors below.
+function $paragraphAtCollapsedStart(): ElementNode | null {
+  const selection = $getSelection();
+  if (!$isRangeSelection(selection) || !selection.isCollapsed()) return null;
+  const anchor = selection.anchor;
+  if (anchor.offset !== 0) return null;
+  const node = anchor.getNode();
+  if ($isParagraphNode(node)) return node;
+  if ($isTextNode(node) && node.getPreviousSibling() === null) {
+    const parent = node.getParent();
+    if (parent && $isParagraphNode(parent)) return parent;
+  }
+  return null;
+}
+
+function $paragraphAtCollapsedEnd(): ElementNode | null {
+  const selection = $getSelection();
+  if (!$isRangeSelection(selection) || !selection.isCollapsed()) return null;
+  const anchor = selection.anchor;
+  const node = anchor.getNode();
+  if ($isParagraphNode(node)) {
+    return anchor.offset === node.getChildrenSize() ? node : null;
+  }
+  if ($isTextNode(node) && node.getNextSibling() === null && anchor.offset === node.getTextContentSize()) {
+    const parent = node.getParent();
+    if (parent && $isParagraphNode(parent)) return parent;
   }
   return null;
 }
@@ -168,23 +209,64 @@ export function usePagination(): number {
       });
     };
 
-    const unregister = editor.registerUpdateListener(({ tags }) => {
-      // Only skip updates WE made (tagged PAGINATION_TAG) - they're already
-      // accounted for within the reflow pass that made them, and scheduling
-      // another reflow for them would perpetually retrigger itself.
-      // HISTORY_MERGE_TAG alone is not a safe signal for this: it's a
-      // shared, generic Lexical tag that the library's own internals also
-      // use for their own unrelated follow-up commits (e.g. normalizing
-      // text nodes after a large paste) - treating every such update as
-      // "ours" silently skipped reflowing content that genuinely changed.
-      if (tags.has(PAGINATION_TAG)) return;
-      schedule();
-    });
+    const teardowns = [
+      editor.registerUpdateListener(({ tags }) => {
+        // Only skip updates WE made (tagged PAGINATION_TAG) - they're already
+        // accounted for within the reflow pass that made them, and scheduling
+        // another reflow for them would perpetually retrigger itself.
+        // HISTORY_MERGE_TAG alone is not a safe signal for this: it's a
+        // shared, generic Lexical tag that the library's own internals also
+        // use for their own unrelated follow-up commits (e.g. normalizing
+        // text nodes after a large paste) - treating every such update as
+        // "ours" silently skipped reflowing content that genuinely changed.
+        if (tags.has(PAGINATION_TAG)) return;
+        schedule();
+      }),
+
+      // A continuation's leading edge is a pagination artifact, not a real
+      // paragraph boundary - in Google Docs terms the paragraph continues
+      // straight through the page break. So Backspace at the start of a
+      // continuation deletes the last character of the head fragment (and
+      // Delete at the end of a head deletes the continuation's first char),
+      // exactly as if the boundary didn't exist. Without this, the default
+      // handler merges the fake boundary - deleting nothing - and the next
+      // reflow immediately re-splits it, so the key appears dead.
+      editor.registerCommand(
+        KEY_BACKSPACE_COMMAND,
+        (event) => {
+          const paragraph = $paragraphAtCollapsedStart();
+          if (!paragraph) return false;
+          if (!continuationKeys.current.has(paragraph.getKey())) return false;
+          const prev = paragraph.getPreviousSibling();
+          if (!prev || !$isElementNode(prev)) return false;
+
+          if (event) event.preventDefault();
+          prev.selectEnd().deleteCharacter(true);
+          return true;
+        },
+        COMMAND_PRIORITY_HIGH,
+      ),
+      editor.registerCommand(
+        KEY_DELETE_COMMAND,
+        (event) => {
+          const paragraph = $paragraphAtCollapsedEnd();
+          if (!paragraph) return false;
+          const next = paragraph.getNextSibling();
+          if (!next || !$isElementNode(next)) return false;
+          if (!continuationKeys.current.has(next.getKey())) return false;
+
+          if (event) event.preventDefault();
+          next.selectStart().deleteCharacter(false);
+          return true;
+        },
+        COMMAND_PRIORITY_HIGH,
+      ),
+    ];
 
     schedule();
     window.addEventListener('resize', schedule);
     return () => {
-      unregister();
+      for (const teardown of teardowns) teardown();
       window.removeEventListener('resize', schedule);
     };
   }, [editor, reflow]);
